@@ -71,6 +71,7 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.sort_column = "Name"
         self.sort_reverse = False
         self.is_transferring = False
+        self.checked_items = set()
 
         # Theme
         saved_theme = self.config_mgr.get("theme", "dark")
@@ -452,15 +453,28 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
             btn.pack(side="left", padx=2)
             self.cat_buttons[cat] = btn
 
-        # Selection Control Row
+        # Selection Control Row (Option to select one or more files)
         sel_row = ctk.CTkFrame(source_frame, fg_color="transparent")
         sel_row.pack(fill="x", padx=10, pady=(0, 4))
 
+        # 1. Native Windows Multi-File Picker Button
         ctk.CTkButton(
             sel_row,
-            text="Select All",
-            width=70,
-            height=22,
+            text="📑 Pick Files...",
+            width=92,
+            height=24,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color=("#1f6aa5", "#2563eb"),
+            hover_color=("#1a5276", "#1d4ed8"),
+            command=self.open_multi_file_picker
+        ).pack(side="left", padx=(0, 4))
+
+        # 2. Select All
+        ctk.CTkButton(
+            sel_row,
+            text="☑ All",
+            width=50,
+            height=24,
             font=ctk.CTkFont(size=11),
             fg_color=("gray85", "gray25"),
             hover_color=("gray75", "gray35"),
@@ -468,11 +482,12 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
             command=self.select_all_source
         ).pack(side="left", padx=(0, 4))
 
+        # 3. Clear All
         ctk.CTkButton(
             sel_row,
-            text="Clear",
-            width=50,
-            height=22,
+            text="☐ Clear",
+            width=54,
+            height=24,
             font=ctk.CTkFont(size=11),
             fg_color=("gray85", "gray25"),
             hover_color=("gray75", "gray35"),
@@ -480,18 +495,33 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
             command=self.clear_source_selection
         ).pack(side="left", padx=(0, 4))
 
+        # 4. Invert
         ctk.CTkButton(
             sel_row,
-            text="Invert",
-            width=50,
-            height=22,
+            text="🔄 Invert",
+            width=54,
+            height=24,
             font=ctk.CTkFont(size=11),
             fg_color=("gray85", "gray25"),
             hover_color=("gray75", "gray35"),
             text_color=("black", "white"),
             command=self.invert_source_selection
+        ).pack(side="left", padx=(0, 4))
+
+        # 5. Select by extension
+        ctk.CTkButton(
+            sel_row,
+            text="🎯 By Type...",
+            width=70,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            fg_color=("gray85", "gray25"),
+            hover_color=("gray75", "gray35"),
+            text_color=("black", "white"),
+            command=self.select_by_type_dialog
         ).pack(side="left")
 
+        # Selection Count Badge
         self.sel_count_label = ctk.CTkLabel(
             sel_row,
             text="0 selected",
@@ -500,11 +530,11 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         self.sel_count_label.pack(side="right")
 
-        # Treeview for source files
+        # Treeview for source files with checkbox column
         tree_container = tk.Frame(source_frame, bg="#1e1e1e" if self.current_theme == "dark" else "#ffffff")
         tree_container.pack(fill="both", expand=True, padx=10, pady=4)
 
-        columns = ("name", "size", "type", "date")
+        columns = ("check", "name", "size", "type", "date")
         self.src_tree = ttk.Treeview(
             tree_container,
             columns=columns,
@@ -513,12 +543,14 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
             selectmode="extended"
         )
 
+        self.src_tree.heading("check", text="☑", command=self.toggle_all_checks)
         self.src_tree.heading("name", text="File Name", command=lambda: self.sort_tree("Name"))
         self.src_tree.heading("size", text="Size", command=lambda: self.sort_tree("Size"))
         self.src_tree.heading("type", text="Type", command=lambda: self.sort_tree("Type"))
         self.src_tree.heading("date", text="Date Modified", command=lambda: self.sort_tree("Date"))
 
-        self.src_tree.column("name", width=220, anchor="w")
+        self.src_tree.column("check", width=36, anchor="center")
+        self.src_tree.column("name", width=210, anchor="w")
         self.src_tree.column("size", width=75, anchor="e")
         self.src_tree.column("type", width=80, anchor="w")
         self.src_tree.column("date", width=120, anchor="center")
@@ -531,6 +563,8 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         src_scroll.pack(side="right", fill="y")
 
         # Bindings
+        self.src_tree.bind("<Button-1>", self.on_tree_click)
+        self.src_tree.bind("<space>", lambda e: self.toggle_focused_item_check())
         self.src_tree.bind("<<TreeviewSelect>>", lambda e: self.update_selection_count())
         self.src_tree.bind("<Double-1>", lambda e: self.on_source_item_double_click())
         self.src_tree.bind("<Button-3>", self.show_source_context_menu)
@@ -938,11 +972,12 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         for it in filtered:
             icon = "📁 " if it["is_dir"] else "📄 "
             type_str = "Folder" if it["is_dir"] else (it["ext"].upper().lstrip(".") or "File")
+            chk = "☑" if it["path"] in self.checked_items else "☐"
             self.src_tree.insert(
                 "",
                 "end",
                 iid=it["path"],
-                values=(f"{icon}{it['name']}", it["size_str"], type_str, it["mtime_str"])
+                values=(chk, f"{icon}{it['name']}", it["size_str"], type_str, it["mtime_str"])
             )
             total_bytes += it["size"]
 
@@ -1010,36 +1045,173 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception:
             self.dest_disk_label.configure(text="")
 
-    # ================= Selection Helpers =================
+    # ================= Selection Helpers (Select One or More Files) =================
+
+    def on_tree_click(self, event):
+        item = self.src_tree.identify_row(event.y)
+        col = self.src_tree.identify_column(event.x)
+        if not item:
+            return
+
+        # If user clicks specifically on the checkmark column (#1)
+        if col == "#1":
+            self.toggle_item_check(item)
+            return "break"
+        else:
+            # If user clicked without Ctrl or Shift, also toggle check for ease on trackpads
+            if not (event.state & 0x0004 or event.state & 0x0001):  # No Ctrl and No Shift
+                self.toggle_item_check(item)
+                if item in self.checked_items:
+                    self.src_tree.selection_add(item)
+                else:
+                    self.src_tree.selection_remove(item)
+
+    def toggle_focused_item_check(self):
+        focused = self.src_tree.focus()
+        if focused:
+            self.toggle_item_check(focused)
+
+    def toggle_item_check(self, path: str):
+        if path in self.checked_items:
+            self.checked_items.remove(path)
+            new_val = "☐"
+            if path in self.src_tree.selection():
+                self.src_tree.selection_remove(path)
+        else:
+            self.checked_items.add(path)
+            new_val = "☑"
+            self.src_tree.selection_add(path)
+
+        if self.src_tree.exists(path):
+            current_vals = list(self.src_tree.item(path, "values"))
+            if current_vals:
+                current_vals[0] = new_val
+                self.src_tree.item(path, values=current_vals)
+
+        self.update_selection_count()
+
+    def toggle_all_checks(self):
+        visible_items = self.src_tree.get_children()
+        if not visible_items:
+            return
+        all_checked = all(it in self.checked_items for it in visible_items)
+        if all_checked:
+            self.clear_source_selection()
+        else:
+            self.select_all_source()
 
     def select_all_source(self):
         for item in self.src_tree.get_children():
+            self.checked_items.add(item)
+            current_vals = list(self.src_tree.item(item, "values"))
+            if current_vals:
+                current_vals[0] = "☑"
+                self.src_tree.item(item, values=current_vals)
             self.src_tree.selection_add(item)
         self.update_selection_count()
 
     def clear_source_selection(self):
+        self.checked_items.clear()
+        for item in self.src_tree.get_children():
+            current_vals = list(self.src_tree.item(item, "values"))
+            if current_vals:
+                current_vals[0] = "☐"
+                self.src_tree.item(item, values=current_vals)
         self.src_tree.selection_remove(self.src_tree.selection())
         self.update_selection_count()
 
     def invert_source_selection(self):
-        current = set(self.src_tree.selection())
-        all_items = self.src_tree.get_children()
-        for item in all_items:
-            if item in current:
+        for item in self.src_tree.get_children():
+            if item in self.checked_items:
+                self.checked_items.remove(item)
+                new_val = "☐"
                 self.src_tree.selection_remove(item)
             else:
+                self.checked_items.add(item)
+                new_val = "☑"
                 self.src_tree.selection_add(item)
+            current_vals = list(self.src_tree.item(item, "values"))
+            if current_vals:
+                current_vals[0] = new_val
+                self.src_tree.item(item, values=current_vals)
         self.update_selection_count()
 
+    def open_multi_file_picker(self):
+        """Allows picking one or multiple files directly using native Windows File Picker."""
+        picked = filedialog.askopenfilenames(
+            initialdir=self.source_dir,
+            title="Select One or More Files to Transfer"
+        )
+        if not picked:
+            return
+
+        first_dir = os.path.dirname(picked[0])
+        if os.path.normpath(first_dir) != os.path.normpath(self.source_dir):
+            self.set_source_dir(first_dir)
+
+        # Check all picked files
+        for f in picked:
+            norm_path = os.path.normpath(f)
+            self.checked_items.add(norm_path)
+            if self.src_tree.exists(norm_path):
+                current_vals = list(self.src_tree.item(norm_path, "values"))
+                if current_vals:
+                    current_vals[0] = "☑"
+                    self.src_tree.item(norm_path, values=current_vals)
+                self.src_tree.selection_add(norm_path)
+
+        self.update_selection_count()
+        self.set_status(f"Selected {len(picked)} file(s) via file picker. Click 'MOVE' to transfer!")
+
+    def select_by_type_dialog(self):
+        """Pop up a menu to select all files of a specific extension with 1 click."""
+        exts = sorted(list({os.path.splitext(it["name"])[1].lower() for it in self.source_items if not it["is_dir"] and os.path.splitext(it["name"])[1]}))
+        if not exts:
+            messagebox.showinfo("No Extensions", "No files with extensions found in the current folder.")
+            return
+
+        menu = tk.Menu(self, tearoff=0)
+        for ext in exts:
+            count = sum(1 for it in self.source_items if not it["is_dir"] and os.path.splitext(it["name"])[1].lower() == ext)
+            label = f"Select all {ext} files ({count})"
+            menu.add_command(label=label, command=lambda e=ext: self.select_files_by_extension(e))
+
+        x = self.winfo_pointerx()
+        y = self.winfo_pointery()
+        menu.tk_popup(x, y)
+
+    def select_files_by_extension(self, target_ext: str):
+        target_ext = target_ext.lower()
+        count = 0
+        for item in self.src_tree.get_children():
+            if os.path.splitext(item)[1].lower() == target_ext:
+                self.checked_items.add(item)
+                current_vals = list(self.src_tree.item(item, "values"))
+                if current_vals:
+                    current_vals[0] = "☑"
+                    self.src_tree.item(item, values=current_vals)
+                self.src_tree.selection_add(item)
+                count += 1
+        self.update_selection_count()
+        self.set_status(f"Checked {count} '{target_ext}' files!")
+
+    def get_selected_items(self) -> list:
+        """Returns list of all checked or selected file paths."""
+        combined = set(self.checked_items)
+        combined.update(self.src_tree.selection())
+        return [p for p in combined if os.path.exists(p)]
+
     def update_selection_count(self):
-        selected = self.src_tree.selection()
-        count = len(selected)
+        combined = set(self.checked_items)
+        combined.update(self.src_tree.selection())
+        count = len(combined)
+
         if count == 0:
             self.sel_count_label.configure(text="0 selected")
             return
 
         total_bytes = 0
-        for path in selected:
+        for path in combined:
             if os.path.isfile(path):
                 try:
                     total_bytes += os.path.getsize(path)
@@ -1047,7 +1219,7 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     pass
 
         self.sel_count_label.configure(
-            text=f"{count} selected ({format_size(total_bytes)})"
+            text=f"☑ {count} selected ({format_size(total_bytes)})"
         )
 
     # ================= Double Click & Context Menus =================
@@ -1142,9 +1314,17 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # ================= Transfer Operations (Move, Copy, Undo) =================
 
     def transfer_move(self):
-        selected = list(self.src_tree.selection())
+        selected = self.get_selected_items()
         if not selected:
-            messagebox.showinfo("No Files Selected", "Please select one or more files from the Source pane to move.")
+            messagebox.showinfo(
+                "No Files Selected",
+                "Please select one or more files to move.\n\n"
+                "💡 Options to select files:\n"
+                "• Click any row or checkbox to check/uncheck files\n"
+                "• Click '📑 Pick Files...' to choose files via Windows dialog\n"
+                "• Click '☑ All' to select all files\n"
+                "• Click '🎯 By Type...' to select by extension (e.g. .pdf, .jpg)"
+            )
             return
 
         if os.path.normpath(self.source_dir) == os.path.normpath(self.dest_dir):
@@ -1154,9 +1334,13 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.run_transfer_thread(selected, action="move")
 
     def transfer_copy(self):
-        selected = list(self.src_tree.selection())
+        selected = self.get_selected_items()
         if not selected:
-            messagebox.showinfo("No Files Selected", "Please select one or more files from the Source pane to copy.")
+            messagebox.showinfo(
+                "No Files Selected",
+                "Please select one or more files to copy.\n\n"
+                "💡 Click any file's checkbox or use '📑 Pick Files...' to choose."
+            )
             return
 
         if os.path.normpath(self.source_dir) == os.path.normpath(self.dest_dir):
@@ -1206,6 +1390,10 @@ class FileFlowApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.is_transferring = False
         self.set_buttons_state("normal")
         self.progress_bar.set(1.0)
+
+        # Remove successfully moved files from checked set
+        for src_path, _ in result.transferred_items:
+            self.checked_items.discard(src_path)
 
         # Build notification message
         msg_parts = []

@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build outputs and dist
+build/
+dist/
+FileFlow.spec
+FileFlow-Installer-Package/
+*.zip
+
+# Local user configs & cache
+config.json
+.vscode/
+.idea/
+*.log

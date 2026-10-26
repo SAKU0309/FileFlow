@@ -3,7 +3,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue.svg?logo=windows)](https://github.com)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python)](https://python.org)
 [![GUI](https://img.shields.io/badge/GUI-CustomTkinter-blueviolet)](https://github.com/TomSchimansky/CustomTkinter)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 
 > Move and organize files across folders on your laptop with **1 click** — completely eliminating the tedious **Ctrl+C / Ctrl+V** copy-paste routine.
 
